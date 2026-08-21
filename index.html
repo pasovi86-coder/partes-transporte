@@ -287,11 +287,19 @@
 <!-- Firebase (guarda y sincroniza los datos entre todos los moviles) -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 
 <script>
 const KEY_AVERIAS = 'partes:list';
 const KEY_REPARACIONES = 'reparaciones:list';
 const KEY_NEUMATICOS = 'neumaticos:data';
+
+/* --- Aviso por email (EmailJS) --- */
+const EMAIL_AVISOS = "pasovimantenimiento@gmail.com";
+const EMAILJS_PUBLIC_KEY = "D3mazv-jmfaVH_iLr";
+const EMAILJS_SERVICE_ID = "service_n8s9p1u";
+const EMAILJS_TEMPLATE_ID = "template_a4p2d6r";
+emailjs.init(EMAILJS_PUBLIC_KEY);
 
 let reports = [];
 let repairs = [];
@@ -590,17 +598,34 @@ async function submitReport(){
   const btn = document.getElementById('submit-btn');
   btn.disabled = true; btn.textContent = 'ENVIANDO…';
 
-  reports.unshift({
+  const nuevoParte = {
     id: uid(), nombre, vehiculo, tipo: selectedTipo, urgencia: selectedUrgencia,
     descripcion: desc, fotos: selectedPhotos.slice(), estado: 'pendiente', timestamp: new Date().toISOString(),
-  });
+  };
+  reports.unshift(nuevoParte);
   await saveReports();
+  enviarEmailAviso(nuevoParte);
 
   selectedTipo = null; selectedUrgencia = null; selectedPhotos = [];
   window.__draft = {};
   render();
   showToast('Parte enviado a mantenimiento');
 }
+
+function enviarEmailAviso(parte){
+  try{
+    emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+      vehiculo: parte.vehiculo,
+      chofer: parte.nombre,
+      tipo: TIPO_LABELS[parte.tipo],
+      urgencia: URG_LABELS[parte.urgencia],
+      descripcion: parte.descripcion,
+      fecha: new Date(parte.timestamp).toLocaleString('es-ES'),
+      destinatario: EMAIL_AVISOS,
+    }).catch(e=>console.error('EmailJS error', e));
+  }catch(e){ console.error('EmailJS no disponible', e); }
+}
+
 
 /* ---------------- MANTENIMIENTO: NAV ---------------- */
 
