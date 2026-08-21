@@ -1,5 +1,4 @@
-[index (1).html](https://github.com/user-attachments/files/31300518/index.1.html)
-# partes-transporte<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8"/>
