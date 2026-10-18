@@ -675,6 +675,12 @@ function renderAverias(content){
   else if(activeFilter==='resuelto') filtered = filtered.filter(r=>r.estado==='resuelto');
 
   filtered.sort((a,b)=>{
+    const aRes = a.estado==='resuelto', bRes = b.estado==='resuelto';
+    // Los resueltos van siempre al final
+    if(aRes !== bRes) return aRes ? 1 : -1;
+    // Entre resueltos: por fecha de creación, el más reciente primero
+    if(aRes && bRes) return new Date(b.timestamp) - new Date(a.timestamp);
+    // Entre no resueltos: por urgencia y luego por fecha
     const order = {urgente:0, cuando_se_pueda:1, tener_en_cuenta:2};
     if(order[a.urgencia]!==order[b.urgencia]) return order[a.urgencia]-order[b.urgencia];
     return new Date(b.timestamp) - new Date(a.timestamp);
@@ -743,10 +749,26 @@ function renderAveriaDetail(content, r){
       '<div class="rc-meta">Chofer: <b>'+escapeHtml(r.nombre)+'</b> · Estado: <b>'+ESTADO_LABEL[r.estado]+'</b></div>'+
       (r.fotos && r.fotos.length ? '<div class="rc-photos">'+r.fotos.map(p=>'<img src="'+p+'"/>').join('')+'</div>' : '')+
     '</div>'+
-    '<div id="averia-workzone"></div>';
+    '<div id="averia-workzone"></div>'+
+    '<button class="btn-danger-ghost" id="btn-eliminar-parte" style="width:100%;margin-top:18px;padding:12px;">🗑 Eliminar parte</button>';
 
   document.getElementById('back-to-list').onclick = ()=>{ selectedReportId = null; renderAverias(content); };
   content.querySelectorAll('.rc-photos img').forEach(img=>{ img.onclick = ()=> openLightbox(img.src); });
+
+  document.getElementById('btn-eliminar-parte').onclick = async ()=>{
+    const ok = confirm('¿Seguro que quieres eliminar este parte?\n\nVehículo: '+r.vehiculo+'\n\nNo se puede deshacer.'+(r.estado==='resuelto'?'\nTambién se borrará su entrada en Reparaciones.':''));
+    if(!ok) return;
+    reports = reports.filter(x=>x.id!==r.id);
+    await saveReports();
+    const hayReparacion = repairs.some(x=>x.origenAveriaId===r.id);
+    if(hayReparacion){
+      repairs = repairs.filter(x=>x.origenAveriaId!==r.id);
+      await saveRepairs();
+    }
+    selectedReportId = null;
+    render();
+    showToast('Parte eliminado');
+  };
 
   const zone = document.getElementById('averia-workzone');
 
