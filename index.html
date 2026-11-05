@@ -68,7 +68,7 @@
     text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;
   }
   .field label .req{color:var(--urgent);}
-  input[type="text"], input[type="number"], input[type="date"], textarea, select{
+  input[type="text"], input[type="number"], input[type="date"], input[type="datetime-local"], textarea, select{
     width:100%;border:2px solid var(--line);border-radius:10px;padding:13px 14px;
     font-size:15px;font-family:var(--font-body);background:var(--card);color:var(--ink);
   }
@@ -541,6 +541,11 @@ function renderChoferForm(content){
     '</div></div>'+
     '<div class="field"><label>Descripción <span class="req">*</span></label>'+
     '<textarea id="f-desc" placeholder="Describe el problema con el máximo detalle posible…">'+((window.__draft&&window.__draft.desc)||'')+'</textarea></div>'+
+    '<div class="field"><label>Día y hora de llegada a la base</label>'+
+    '<div style="display:flex;gap:8px;align-items:center;">'+
+    '<input type="datetime-local" id="f-llegada" value="'+((window.__draft&&window.__draft.llegada)||'')+'" style="flex:1;"/>'+
+    '<button type="button" class="btn-ghost" id="btn-llegada-ahora" style="white-space:nowrap;">Ahora</button>'+
+    '</div></div>'+
     '<div class="field"><label>Fotos</label>'+
     '<div class="photo-zone" id="photo-zone"><div style="font-size:26px;">📷</div><p>Toca para añadir fotos (máx. 4)</p></div>'+
     '<input type="file" id="f-photos" accept="image/*" capture="environment" multiple style="display:none"/>'+
@@ -566,13 +571,24 @@ function renderChoferForm(content){
   };
   renderThumbs();
 
-  ['f-nombre','f-vehiculo','f-desc'].forEach(id=>{
-    document.getElementById(id).oninput = (e)=>{
+  ['f-nombre','f-vehiculo','f-desc','f-llegada'].forEach(id=>{
+    const el = document.getElementById(id);
+    const handler = (e)=>{
       window.__draft = window.__draft || {};
-      const map = {'f-nombre':'nombre','f-vehiculo':'vehiculo','f-desc':'desc'};
+      const map = {'f-nombre':'nombre','f-vehiculo':'vehiculo','f-desc':'desc','f-llegada':'llegada'};
       window.__draft[map[id]] = e.target.value;
     };
+    el.oninput = handler;
+    el.onchange = handler;
   });
+  document.getElementById('btn-llegada-ahora').onclick = ()=>{
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    const v = d.toISOString().slice(0,16);
+    document.getElementById('f-llegada').value = v;
+    window.__draft = window.__draft || {};
+    window.__draft.llegada = v;
+  };
 
   document.getElementById('submit-btn').onclick = submitReport;
 }
@@ -590,6 +606,7 @@ async function submitReport(){
   const nombre = document.getElementById('f-nombre').value.trim();
   const vehiculo = document.getElementById('f-vehiculo').value.trim();
   const desc = document.getElementById('f-desc').value.trim();
+  const llegadaBase = document.getElementById('f-llegada').value || '';
 
   if(!nombre || !vehiculo || !desc || !selectedTipo || !selectedUrgencia){
     showToast('⚠ Faltan campos obligatorios');
@@ -600,7 +617,7 @@ async function submitReport(){
 
   const nuevoParte = {
     id: uid(), nombre, vehiculo, tipo: selectedTipo, urgencia: selectedUrgencia,
-    descripcion: desc, fotos: selectedPhotos.slice(), estado: 'pendiente', timestamp: new Date().toISOString(),
+    descripcion: desc, llegadaBase, fotos: selectedPhotos.slice(), estado: 'pendiente', timestamp: new Date().toISOString(),
   };
   reports.unshift(nuevoParte);
   await saveReports();
@@ -612,6 +629,13 @@ async function submitReport(){
   showToast('Parte enviado a mantenimiento');
 }
 
+function formatLlegada(v){
+  if(!v) return '';
+  const d = new Date(v);
+  if(isNaN(d)) return '';
+  return d.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' + d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+}
+
 function enviarEmailAviso(parte){
   try{
     emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
@@ -621,6 +645,7 @@ function enviarEmailAviso(parte){
       urgencia: URG_LABELS[parte.urgencia],
       descripcion: parte.descripcion,
       fecha: new Date(parte.timestamp).toLocaleString('es-ES'),
+      llegada_base: parte.llegadaBase ? formatLlegada(parte.llegadaBase) : 'No indicada',
       destinatario: EMAIL_AVISOS,
     }).catch(e=>console.error('EmailJS error', e));
   }catch(e){ console.error('EmailJS no disponible', e); }
@@ -711,7 +736,7 @@ function renderAverias(content){
       '<div class="rc-top"><div class="rc-vehicle">'+escapeHtml(r.vehiculo)+'</div><div class="rc-time">'+formatDate(r.timestamp)+'</div></div>'+
       '<div class="rc-tags"><span class="tag urg-'+r.urgencia+'">'+URG_LABELS[r.urgencia]+'</span><span class="tag tipo">'+TIPO_LABELS[r.tipo]+'</span>'+(ESTADO_TAG[r.estado]||'')+'</div>'+
       '<div class="rc-desc">'+escapeHtml(r.descripcion)+'</div>'+
-      '<div class="rc-meta">Chofer: <b>'+escapeHtml(r.nombre)+'</b></div>'+
+      '<div class="rc-meta">Chofer: <b>'+escapeHtml(r.nombre)+'</b>'+(r.llegadaBase?' · Llegada a base: <b>'+formatLlegada(r.llegadaBase)+'</b>':'')+'</div>'+
       (r.fotos && r.fotos.length ? '<div class="rc-photos">'+r.fotos.map(p=>'<img src="'+p+'"/>').join('')+'</div>' : '')+
       '<button class="btn-secondary" data-open="'+r.id+'" style="width:100%;margin-top:6px;">'+(r.estado==='pendiente'?'Abrir parte →':(r.estado==='revision'?'Continuar reparación →':'Ver detalle →'))+'</button>'+
     '</div>'
@@ -746,7 +771,7 @@ function renderAveriaDetail(content, r){
       '<div class="rc-top"><div class="rc-vehicle">'+escapeHtml(r.vehiculo)+'</div><div class="rc-time">'+formatDate(r.timestamp)+'</div></div>'+
       '<div class="rc-tags"><span class="tag urg-'+r.urgencia+'">'+URG_LABELS[r.urgencia]+'</span><span class="tag tipo">'+TIPO_LABELS[r.tipo]+'</span></div>'+
       '<div class="rc-desc">'+escapeHtml(r.descripcion)+'</div>'+
-      '<div class="rc-meta">Chofer: <b>'+escapeHtml(r.nombre)+'</b> · Estado: <b>'+ESTADO_LABEL[r.estado]+'</b></div>'+
+      '<div class="rc-meta">Chofer: <b>'+escapeHtml(r.nombre)+'</b> · Estado: <b>'+ESTADO_LABEL[r.estado]+'</b>'+(r.llegadaBase?'<br/>Llegada a base: <b>'+formatLlegada(r.llegadaBase)+'</b>':'')+'</div>'+
       (r.fotos && r.fotos.length ? '<div class="rc-photos">'+r.fotos.map(p=>'<img src="'+p+'"/>').join('')+'</div>' : '')+
     '</div>'+
     '<div id="averia-workzone"></div>'+
