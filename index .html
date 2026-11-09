@@ -68,7 +68,7 @@
     text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;
   }
   .field label .req{color:var(--urgent);}
-  input[type="text"], input[type="number"], input[type="date"], textarea, select{
+  input[type="text"], input[type="number"], input[type="date"], input[type="datetime-local"], textarea, select{
     width:100%;border:2px solid var(--line);border-radius:10px;padding:13px 14px;
     font-size:15px;font-family:var(--font-body);background:var(--card);color:var(--ink);
   }
@@ -541,6 +541,11 @@ function renderChoferForm(content){
     '</div></div>'+
     '<div class="field"><label>Descripción <span class="req">*</span></label>'+
     '<textarea id="f-desc" placeholder="Describe el problema con el máximo detalle posible…">'+((window.__draft&&window.__draft.desc)||'')+'</textarea></div>'+
+    '<div class="field"><label>Día y hora de llegada a la base</label>'+
+    '<div style="display:flex;gap:8px;align-items:center;">'+
+    '<input type="datetime-local" id="f-llegada" value="'+((window.__draft&&window.__draft.llegada)||'')+'" style="flex:1;"/>'+
+    '<button type="button" class="btn-ghost" id="btn-llegada-ahora" style="white-space:nowrap;">Ahora</button>'+
+    '</div></div>'+
     '<div class="field"><label>Fotos</label>'+
     '<div class="photo-zone" id="photo-zone"><div style="font-size:26px;">📷</div><p>Toca para añadir fotos (máx. 4)</p></div>'+
     '<input type="file" id="f-photos" accept="image/*" capture="environment" multiple style="display:none"/>'+
@@ -566,13 +571,24 @@ function renderChoferForm(content){
   };
   renderThumbs();
 
-  ['f-nombre','f-vehiculo','f-desc'].forEach(id=>{
-    document.getElementById(id).oninput = (e)=>{
+  ['f-nombre','f-vehiculo','f-desc','f-llegada'].forEach(id=>{
+    const el = document.getElementById(id);
+    const handler = (e)=>{
       window.__draft = window.__draft || {};
-      const map = {'f-nombre':'nombre','f-vehiculo':'vehiculo','f-desc':'desc'};
+      const map = {'f-nombre':'nombre','f-vehiculo':'vehiculo','f-desc':'desc','f-llegada':'llegada'};
       window.__draft[map[id]] = e.target.value;
     };
+    el.oninput = handler;
+    el.onchange = handler;
   });
+  document.getElementById('btn-llegada-ahora').onclick = ()=>{
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    const v = d.toISOString().slice(0,16);
+    document.getElementById('f-llegada').value = v;
+    window.__draft = window.__draft || {};
+    window.__draft.llegada = v;
+  };
 
   document.getElementById('submit-btn').onclick = submitReport;
 }
@@ -590,6 +606,7 @@ async function submitReport(){
   const nombre = document.getElementById('f-nombre').value.trim();
   const vehiculo = document.getElementById('f-vehiculo').value.trim();
   const desc = document.getElementById('f-desc').value.trim();
+  const llegadaBase = document.getElementById('f-llegada').value || '';
 
   if(!nombre || !vehiculo || !desc || !selectedTipo || !selectedUrgencia){
     showToast('⚠ Faltan campos obligatorios');
@@ -600,7 +617,7 @@ async function submitReport(){
 
   const nuevoParte = {
     id: uid(), nombre, vehiculo, tipo: selectedTipo, urgencia: selectedUrgencia,
-    descripcion: desc, fotos: selectedPhotos.slice(), estado: 'pendiente', timestamp: new Date().toISOString(),
+    descripcion: desc, llegadaBase, fotos: selectedPhotos.slice(), estado: 'pendiente', timestamp: new Date().toISOString(),
   };
   reports.unshift(nuevoParte);
   await saveReports();
@@ -612,6 +629,13 @@ async function submitReport(){
   showToast('Parte enviado a mantenimiento');
 }
 
+function formatLlegada(v){
+  if(!v) return '';
+  const d = new Date(v);
+  if(isNaN(d)) return '';
+  return d.toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' + d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+}
+
 function enviarEmailAviso(parte){
   try{
     emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
@@ -621,6 +645,7 @@ function enviarEmailAviso(parte){
       urgencia: URG_LABELS[parte.urgencia],
       descripcion: parte.descripcion,
       fecha: new Date(parte.timestamp).toLocaleString('es-ES'),
+      llegada_base: parte.llegadaBase ? formatLlegada(parte.llegadaBase) : 'No indicada',
       destinatario: EMAIL_AVISOS,
     }).catch(e=>console.error('EmailJS error', e));
   }catch(e){ console.error('EmailJS no disponible', e); }
@@ -655,74 +680,121 @@ function renderMantenimiento(content){
 
 /* ---------------- AVERIAS (mantenimiento) ---------------- */
 
+let resMatricula = '';
+let resDesde = '';
+let resHasta = '';
+
+function fechaResolucion(r){ return r.finReparacion || r.timestamp; }
+function fechaLocalISO(iso){
+  const d = new Date(iso);
+  if(isNaN(d)) return '';
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return d.getFullYear()+'-'+m+'-'+day;
+}
+function normalizarMatricula(v){ return String(v||'').toLowerCase().replace(/[\s\-\.]/g,''); }
+
 function renderAverias(content){
   const selected = reports.find(r=>r.id===selectedReportId);
   if(selected){ renderAveriaDetail(content, selected); return; }
 
   const filters = [
-    {id:'todos', label:'Todos'},
+    {id:'todos', label:'Por resolver'},
     {id:'urgente', label:'🔴 Urgente'},
     {id:'cuando_se_pueda', label:'🟠 Cuando se pueda'},
     {id:'tener_en_cuenta', label:'🔵 Tenerlo en cuenta'},
     {id:'pendiente', label:'Pendientes'},
     {id:'revision', label:'En reparación'},
-    {id:'resuelto', label:'Resueltos'},
+    {id:'resuelto', label:'✔ Resueltos'},
   ];
-  let filtered = reports.slice();
-  if(['urgente','cuando_se_pueda','tener_en_cuenta'].includes(activeFilter)) filtered = filtered.filter(r=>r.urgencia===activeFilter);
-  else if(activeFilter==='pendiente') filtered = filtered.filter(r=>r.estado==='pendiente');
-  else if(activeFilter==='revision') filtered = filtered.filter(r=>r.estado==='revision');
-  else if(activeFilter==='resuelto') filtered = filtered.filter(r=>r.estado==='resuelto');
 
-  filtered.sort((a,b)=>{
-    const aRes = a.estado==='resuelto', bRes = b.estado==='resuelto';
-    // Los resueltos van siempre al final
-    if(aRes !== bRes) return aRes ? 1 : -1;
-    // Entre resueltos: por fecha de creación, el más reciente primero
-    if(aRes && bRes) return new Date(b.timestamp) - new Date(a.timestamp);
-    // Entre no resueltos: por urgencia y luego por fecha
-    const order = {urgente:0, cuando_se_pueda:1, tener_en_cuenta:2};
-    if(order[a.urgencia]!==order[b.urgencia]) return order[a.urgencia]-order[b.urgencia];
-    return new Date(b.timestamp) - new Date(a.timestamp);
-  });
+  const panelResueltos = activeFilter==='resuelto' ?
+    '<div class="form-card" style="border-style:solid;">'+
+      '<div class="field"><label>Matrícula</label><input type="text" id="res-matricula" placeholder="Buscar por matrícula…" value="'+String(resMatricula).replace(/"/g,'&quot;')+'"/></div>'+
+      '<div class="form-row">'+
+        '<div class="field"><label>Resuelto desde</label><input type="date" id="res-desde" value="'+resDesde+'"/></div>'+
+        '<div class="field"><label>Hasta</label><input type="date" id="res-hasta" value="'+resHasta+'"/></div>'+
+      '</div>'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'+
+        '<span id="res-count" style="font-size:12.5px;font-weight:700;color:var(--ink-soft);"></span>'+
+        '<button class="btn-ghost" id="res-clear">Limpiar filtros</button>'+
+      '</div>'+
+    '</div>' : '';
 
   content.innerHTML =
     '<div class="filters" id="filters">'+
       filters.map(f=>'<div class="filter-chip '+(activeFilter===f.id?'active':'')+'" data-f="'+f.id+'">'+f.label+'</div>').join('')+
     '</div>'+
+    panelResueltos+
     '<div id="report-list"></div>';
 
   document.querySelectorAll('.filter-chip').forEach(c=>{
     c.onclick = ()=>{ activeFilter = c.dataset.f; renderAverias(content); };
   });
 
-  const list = document.getElementById('report-list');
-  if(filtered.length === 0){
-    list.innerHTML = '<div class="empty-state"><p>No hay partes en esta categoría</p></div>';
-    return;
-  }
   const ESTADO_TAG = {
     pendiente: '<span class="tag" style="background:var(--urgent-bg);color:var(--urgent);">● Pendiente</span>',
     revision: '<span class="tag" style="background:var(--medium-bg);color:#96631F;">● En reparación</span>',
     resuelto: '<span class="tag" style="background:var(--success-bg);color:var(--success);">✔ Resuelto</span>',
   };
-  list.innerHTML = filtered.map(r=>
-    '<div class="report-card" data-urg="'+r.urgencia+'" data-id="'+r.id+'">'+
-      '<div class="rc-top"><div class="rc-vehicle">'+escapeHtml(r.vehiculo)+'</div><div class="rc-time">'+formatDate(r.timestamp)+'</div></div>'+
-      '<div class="rc-tags"><span class="tag urg-'+r.urgencia+'">'+URG_LABELS[r.urgencia]+'</span><span class="tag tipo">'+TIPO_LABELS[r.tipo]+'</span>'+(ESTADO_TAG[r.estado]||'')+'</div>'+
-      '<div class="rc-desc">'+escapeHtml(r.descripcion)+'</div>'+
-      '<div class="rc-meta">Chofer: <b>'+escapeHtml(r.nombre)+'</b></div>'+
-      (r.fotos && r.fotos.length ? '<div class="rc-photos">'+r.fotos.map(p=>'<img src="'+p+'"/>').join('')+'</div>' : '')+
-      '<button class="btn-secondary" data-open="'+r.id+'" style="width:100%;margin-top:6px;">'+(r.estado==='pendiente'?'Abrir parte →':(r.estado==='revision'?'Continuar reparación →':'Ver detalle →'))+'</button>'+
-    '</div>'
-  ).join('');
 
-  list.querySelectorAll('.rc-photos img').forEach(img=>{
-    img.onclick = (e)=>{ e.stopPropagation(); openLightbox(img.src); };
-  });
-  list.querySelectorAll('[data-open]').forEach(btn=>{
-    btn.onclick = ()=>{ selectedReportId = btn.dataset.open; newCommentText=''; renderAverias(content); };
-  });
+  const paintList = ()=>{
+    const list = document.getElementById('report-list');
+    let filtered;
+    const totalResueltos = reports.filter(r=>r.estado==='resuelto').length;
+
+    if(activeFilter==='resuelto'){
+      filtered = reports.filter(r=>r.estado==='resuelto');
+      const q = normalizarMatricula(resMatricula);
+      if(q) filtered = filtered.filter(r=>normalizarMatricula(r.vehiculo).includes(q));
+      if(resDesde) filtered = filtered.filter(r=>fechaLocalISO(fechaResolucion(r)) >= resDesde);
+      if(resHasta) filtered = filtered.filter(r=>fechaLocalISO(fechaResolucion(r)) <= resHasta);
+      filtered.sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
+      const cnt = document.getElementById('res-count');
+      if(cnt) cnt.textContent = filtered.length+' de '+totalResueltos+' partes resueltos';
+    } else {
+      filtered = reports.filter(r=>r.estado!=='resuelto');
+      if(['urgente','cuando_se_pueda','tener_en_cuenta'].includes(activeFilter)) filtered = filtered.filter(r=>r.urgencia===activeFilter);
+      else if(activeFilter==='pendiente') filtered = filtered.filter(r=>r.estado==='pendiente');
+      else if(activeFilter==='revision') filtered = filtered.filter(r=>r.estado==='revision');
+      const order = {urgente:0, cuando_se_pueda:1, tener_en_cuenta:2};
+      filtered.sort((a,b)=>{
+        if(order[a.urgencia]!==order[b.urgencia]) return order[a.urgencia]-order[b.urgencia];
+        return new Date(b.timestamp) - new Date(a.timestamp);
+      });
+    }
+
+    if(filtered.length === 0){
+      list.innerHTML = '<div class="empty-state"><p>'+(activeFilter==='resuelto' ? 'No hay partes resueltos con esos filtros' : 'No hay partes pendientes en esta categoría')+'</p></div>';
+      return;
+    }
+
+    list.innerHTML = filtered.map(r=>
+      '<div class="report-card" data-urg="'+r.urgencia+'" data-id="'+r.id+'">'+
+        '<div class="rc-top"><div class="rc-vehicle">'+escapeHtml(r.vehiculo)+'</div><div class="rc-time">'+formatDate(r.timestamp)+'</div></div>'+
+        '<div class="rc-tags"><span class="tag urg-'+r.urgencia+'">'+URG_LABELS[r.urgencia]+'</span><span class="tag tipo">'+TIPO_LABELS[r.tipo]+'</span>'+(ESTADO_TAG[r.estado]||'')+'</div>'+
+        '<div class="rc-desc">'+escapeHtml(r.descripcion)+'</div>'+
+        '<div class="rc-meta">Chofer: <b>'+escapeHtml(r.nombre)+'</b>'+(r.llegadaBase?' · Llegada a base: <b>'+formatLlegada(r.llegadaBase)+'</b>':'')+(r.estado==='resuelto'?'<br/>Resuelto: <b>'+formatDate(fechaResolucion(r))+'</b>':'')+'</div>'+
+        (r.fotos && r.fotos.length ? '<div class="rc-photos">'+r.fotos.map(p=>'<img src="'+p+'"/>').join('')+'</div>' : '')+
+        '<button class="btn-secondary" data-open="'+r.id+'" style="width:100%;margin-top:6px;">'+(r.estado==='pendiente'?'Abrir parte →':(r.estado==='revision'?'Continuar reparación →':'Ver detalle →'))+'</button>'+
+      '</div>'
+    ).join('');
+
+    list.querySelectorAll('.rc-photos img').forEach(img=>{
+      img.onclick = (e)=>{ e.stopPropagation(); openLightbox(img.src); };
+    });
+    list.querySelectorAll('[data-open]').forEach(btn=>{
+      btn.onclick = ()=>{ selectedReportId = btn.dataset.open; newCommentText=''; renderAverias(content); };
+    });
+  };
+
+  if(activeFilter==='resuelto'){
+    document.getElementById('res-matricula').oninput = (e)=>{ resMatricula = e.target.value; paintList(); };
+    document.getElementById('res-desde').onchange = (e)=>{ resDesde = e.target.value; paintList(); };
+    document.getElementById('res-hasta').onchange = (e)=>{ resHasta = e.target.value; paintList(); };
+    document.getElementById('res-clear').onclick = ()=>{ resMatricula=''; resDesde=''; resHasta=''; renderAverias(content); };
+  }
+  paintList();
 }
 
 function formatDuration(ms){
@@ -746,7 +818,7 @@ function renderAveriaDetail(content, r){
       '<div class="rc-top"><div class="rc-vehicle">'+escapeHtml(r.vehiculo)+'</div><div class="rc-time">'+formatDate(r.timestamp)+'</div></div>'+
       '<div class="rc-tags"><span class="tag urg-'+r.urgencia+'">'+URG_LABELS[r.urgencia]+'</span><span class="tag tipo">'+TIPO_LABELS[r.tipo]+'</span></div>'+
       '<div class="rc-desc">'+escapeHtml(r.descripcion)+'</div>'+
-      '<div class="rc-meta">Chofer: <b>'+escapeHtml(r.nombre)+'</b> · Estado: <b>'+ESTADO_LABEL[r.estado]+'</b></div>'+
+      '<div class="rc-meta">Chofer: <b>'+escapeHtml(r.nombre)+'</b> · Estado: <b>'+ESTADO_LABEL[r.estado]+'</b>'+(r.llegadaBase?'<br/>Llegada a base: <b>'+formatLlegada(r.llegadaBase)+'</b>':'')+'</div>'+
       (r.fotos && r.fotos.length ? '<div class="rc-photos">'+r.fotos.map(p=>'<img src="'+p+'"/>').join('')+'</div>' : '')+
     '</div>'+
     '<div id="averia-workzone"></div>'+
