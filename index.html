@@ -1001,8 +1001,22 @@ function renderReparaciones(content){
         '<div class="cost-pill">'+euros(r.coste)+'</div>'+
       '</div>'+
       '<div class="rc-desc" style="white-space:pre-line;">'+escapeHtml(r.descripcion)+'</div>'+
+      '<button class="btn-danger-ghost" data-del-rep="'+r.id+'" style="margin-top:6px;">🗑 Eliminar</button>'+
     '</div>'
   ).join('');
+
+  list.querySelectorAll('[data-del-rep]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const rep = repairs.find(x=>x.id===btn.dataset.delRep);
+      if(!rep) return;
+      const ok = confirm('¿Seguro que quieres eliminar esta reparación?\n\nVehículo: '+rep.vehiculo+'\nCoste: '+euros(rep.coste)+'\n\nNo se puede deshacer.'+(rep.origenAveriaId?'\nEl parte de avería de origen no se borra, solo este registro de coste y duración.':''));
+      if(!ok) return;
+      repairs = repairs.filter(x=>x.id!==rep.id);
+      await saveRepairs();
+      renderReparaciones(content);
+      showToast('Reparación eliminada');
+    };
+  });
 }
 
 /* ---------------- NEUMATICOS ---------------- */
