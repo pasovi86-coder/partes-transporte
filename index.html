@@ -683,6 +683,8 @@ function renderMantenimiento(content){
 let resMatricula = '';
 let resDesde = '';
 let resHasta = '';
+let resModo = 'matricula'; // 'matricula' o 'fecha' (nunca las dos a la vez)
+function attrSafe(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
 function fechaResolucion(r){ return r.finReparacion || r.timestamp; }
 function fechaLocalISO(iso){
@@ -708,16 +710,31 @@ function renderAverias(content){
     {id:'resuelto', label:'✔ Resueltos'},
   ];
 
+  let matriculasResueltas = [];
+  if(activeFilter==='resuelto'){
+    matriculasResueltas = [...new Set(reports.filter(r=>r.estado==='resuelto').map(r=>String(r.vehiculo||'').trim()).filter(Boolean))].sort();
+  }
   const panelResueltos = activeFilter==='resuelto' ?
     '<div class="form-card" style="border-style:solid;">'+
-      '<div class="field"><label>Matrícula</label><input type="text" id="res-matricula" placeholder="Buscar por matrícula…" value="'+String(resMatricula).replace(/"/g,'&quot;')+'"/></div>'+
-      '<div class="form-row">'+
-        '<div class="field"><label>Resuelto desde</label><input type="date" id="res-desde" value="'+resDesde+'"/></div>'+
-        '<div class="field"><label>Hasta</label><input type="date" id="res-hasta" value="'+resHasta+'"/></div>'+
+      '<div class="chip-row" style="margin-bottom:14px;">'+
+        '<div class="chip '+(resModo==='matricula'?'selected':'')+'" data-modo="matricula">🔎 Por matrícula</div>'+
+        '<div class="chip '+(resModo==='fecha'?'selected':'')+'" data-modo="fecha">📅 Por fecha</div>'+
       '</div>'+
+      (resModo==='matricula' ?
+        '<div class="field"><label>Matrícula</label>'+
+          '<input type="text" id="res-matricula" list="res-matriculas" autocomplete="off" placeholder="Escribe o elige una matrícula…" value="'+attrSafe(resMatricula)+'"/>'+
+          '<datalist id="res-matriculas">'+matriculasResueltas.map(m=>'<option value="'+attrSafe(m)+'"></option>').join('')+'</datalist>'+
+        '</div>'
+      :
+        '<div class="form-row">'+
+          '<div class="field"><label>Resuelto desde</label><input type="date" id="res-desde" value="'+attrSafe(resDesde)+'"/></div>'+
+          '<div class="field"><label>Hasta</label><input type="date" id="res-hasta" value="'+attrSafe(resHasta)+'"/></div>'+
+        '</div>'+
+        '<p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 12px;">Se filtra por la fecha en que se cerró el parte. Puedes rellenar solo una de las dos.</p>'
+      )+
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'+
         '<span id="res-count" style="font-size:12.5px;font-weight:700;color:var(--ink-soft);"></span>'+
-        '<button class="btn-ghost" id="res-clear">Limpiar filtros</button>'+
+        '<button class="btn-ghost" id="res-clear">Limpiar filtro</button>'+
       '</div>'+
     '</div>' : '';
 
@@ -745,10 +762,15 @@ function renderAverias(content){
 
     if(activeFilter==='resuelto'){
       filtered = reports.filter(r=>r.estado==='resuelto');
-      const q = normalizarMatricula(resMatricula);
-      if(q) filtered = filtered.filter(r=>normalizarMatricula(r.vehiculo).includes(q));
-      if(resDesde) filtered = filtered.filter(r=>fechaLocalISO(fechaResolucion(r)) >= resDesde);
-      if(resHasta) filtered = filtered.filter(r=>fechaLocalISO(fechaResolucion(r)) <= resHasta);
+      if(resModo==='matricula'){
+        const q = normalizarMatricula(resMatricula);
+        if(q) filtered = filtered.filter(r=>normalizarMatricula(r.vehiculo).includes(q));
+      } else {
+        let d1 = resDesde, d2 = resHasta;
+        if(d1 && d2 && d1 > d2){ const t = d1; d1 = d2; d2 = t; }
+        if(d1) filtered = filtered.filter(r=>fechaLocalISO(fechaResolucion(r)) >= d1);
+        if(d2) filtered = filtered.filter(r=>fechaLocalISO(fechaResolucion(r)) <= d2);
+      }
       filtered.sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
       const cnt = document.getElementById('res-count');
       if(cnt) cnt.textContent = filtered.length+' de '+totalResueltos+' partes resueltos';
@@ -789,9 +811,23 @@ function renderAverias(content){
   };
 
   if(activeFilter==='resuelto'){
-    document.getElementById('res-matricula').oninput = (e)=>{ resMatricula = e.target.value; paintList(); };
-    document.getElementById('res-desde').onchange = (e)=>{ resDesde = e.target.value; paintList(); };
-    document.getElementById('res-hasta').onchange = (e)=>{ resHasta = e.target.value; paintList(); };
+    document.querySelectorAll('[data-modo]').forEach(ch=>{
+      ch.onclick = ()=>{
+        if(resModo === ch.dataset.modo) return;
+        resModo = ch.dataset.modo;
+        // al cambiar de tipo de filtro se borra el otro, para no mezclar los dos
+        resMatricula = ''; resDesde = ''; resHasta = '';
+        renderAverias(content);
+      };
+    });
+    const bind = (id, setter, events)=>{
+      const el = document.getElementById(id);
+      if(!el) return;
+      events.forEach(ev=> el.addEventListener(ev, (e)=>{ setter(e.target.value); paintList(); }));
+    };
+    bind('res-matricula', v=>{ resMatricula = v; }, ['input','change','keyup']);
+    bind('res-desde', v=>{ resDesde = v; }, ['input','change']);
+    bind('res-hasta', v=>{ resHasta = v; }, ['input','change']);
     document.getElementById('res-clear').onclick = ()=>{ resMatricula=''; resDesde=''; resHasta=''; renderAverias(content); };
   }
   paintList();
