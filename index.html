@@ -306,7 +306,7 @@ let repairs = [];
 let tireData = { proveedores: [], compras: [], stock: [], vehiculos: [], rotationThreshold: 10000 };
 
 let currentRole = 'chofer';
-const MANT_PIN = '7412';
+const MANT_PIN = '74ab12';
 let mantAuthenticated = false;
 let showPinPrompt = false;
 let pinError = false;
@@ -390,6 +390,18 @@ function loadAll(){
 }
 
 async function saveReports(){ try{ await db.collection(COL).doc('averias').set({list: reports}); }catch(e){ console.error(e); showToast('⚠ Error guardando (revisa conexión)'); } }
+/* Añade un parte leyendo SIEMPRE la lista actual del servidor (transacción),
+   así no se pisan partes de otros choferes aunque este móvil tenga datos antiguos. */
+async function addReportSafe(parte){
+  const ref = db.collection(COL).doc('averias');
+  await db.runTransaction(async (tx)=>{
+    const snap = await tx.get(ref);
+    const list = (snap.exists && snap.data().list) ? snap.data().list : [];
+    if(!list.some(x=>x.id===parte.id)) list.unshift(parte);
+    tx.set(ref, {list});
+    reports = list;
+  });
+}
 async function saveRepairs(){ try{ await db.collection(COL).doc('reparaciones').set({list: repairs}); }catch(e){ console.error(e); showToast('⚠ Error guardando (revisa conexión)'); } }
 async function saveTireData(){ try{ await db.collection(COL).doc('neumaticos').set(tireData); }catch(e){ console.error(e); showToast('⚠ Error guardando (revisa conexión)'); } }
 
@@ -401,7 +413,7 @@ function compressImage(file){
     reader.onload = (e)=>{
       const img = new Image();
       img.onload = ()=>{
-        const maxDim = 900;
+        const maxDim = 800;
         let w = img.width, h = img.height;
         if(w > h && w > maxDim){ h = h*(maxDim/w); w = maxDim; }
         else if(h > maxDim){ w = w*(maxDim/h); h = maxDim; }
@@ -409,7 +421,7 @@ function compressImage(file){
         canvas.width = w; canvas.height = h;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img,0,0,w,h);
-        resolve(canvas.toDataURL('image/jpeg', 0.55));
+        resolve(canvas.toDataURL('image/jpeg', 0.5));
       };
       img.onerror = reject;
       img.src = e.target.result;
@@ -501,7 +513,7 @@ function renderPinPrompt(content){
       '<div class="section-title" style="margin-top:10px;">ACCESO MANTENIMIENTO</div>'+
       '<p style="font-size:13px;color:var(--ink-soft);margin-bottom:20px;">Introduce el código para entrar</p>'+
     '</div>'+
-    '<div class="field"><input type="text" inputmode="numeric" maxlength="4" id="pin-input" placeholder="••••" style="text-align:center;font-size:24px;letter-spacing:8px;font-weight:800;"/></div>'+
+    '<div class="field"><input type="password" inputmode="text" autocapitalize="off" autocorrect="off" autocomplete="off" maxlength="6" id="pin-input" placeholder="••••••" style="text-align:center;font-size:24px;letter-spacing:8px;font-weight:800;"/></div>'+
     (pinError ? '<p style="color:var(--urgent);font-size:12.5px;font-weight:700;text-align:center;margin-top:-8px;">Código incorrecto</p>' : '')+
     '<button class="submit-btn" id="pin-submit">ENTRAR</button>'+
     '<button class="btn-ghost" id="pin-cancel" style="width:100%;margin-top:10px;">Cancelar</button>';
@@ -509,7 +521,7 @@ function renderPinPrompt(content){
   const input = document.getElementById('pin-input');
   input.focus();
   const tryPin = ()=>{
-    if(input.value === MANT_PIN){
+    if(input.value.trim().toLowerCase() === MANT_PIN){
       mantAuthenticated = true; showPinPrompt = false; pinError = false; currentRole = 'mantenimiento';
       render();
     } else {
@@ -547,8 +559,13 @@ function renderChoferForm(content){
     '<button type="button" class="btn-ghost" id="btn-llegada-ahora" style="white-space:nowrap;">Ahora</button>'+
     '</div></div>'+
     '<div class="field"><label>Fotos</label>'+
-    '<div class="photo-zone" id="photo-zone"><div style="font-size:26px;">📷</div><p>Toca para añadir fotos (máx. 4)</p></div>'+
-    '<input type="file" id="f-photos" accept="image/*" capture="environment" multiple style="display:none"/>'+
+    '<div style="display:flex;gap:10px;">'+
+      '<div class="photo-zone" id="photo-zone-cam" style="flex:1;"><div style="font-size:26px;">📷</div><p>Hacer foto</p></div>'+
+      '<div class="photo-zone" id="photo-zone-gal" style="flex:1;"><div style="font-size:26px;">🖼️</div><p>Elegir de galería</p></div>'+
+    '</div>'+
+    '<p style="font-size:12px;color:var(--ink-soft);margin:8px 0 0;">Máximo 4 fotos</p>'+
+    '<input type="file" id="f-photos-cam" accept="image/*" capture="environment" style="display:none"/>'+
+    '<input type="file" id="f-photos-gal" accept="image/*" multiple style="display:none"/>'+
     '<div class="thumbs" id="thumbs"></div></div>'+
     '<button class="submit-btn" id="submit-btn">ENVIAR PARTE</button>';
 
@@ -559,16 +576,21 @@ function renderChoferForm(content){
     u.onclick = ()=>{ selectedUrgencia = u.dataset.urg; renderChoferForm(content); };
   });
 
-  const photoZone = document.getElementById('photo-zone');
-  const photoInput = document.getElementById('f-photos');
-  photoZone.onclick = ()=> photoInput.click();
-  photoInput.onchange = async (e)=>{
+  const addPhotos = async (e)=>{
     const files = Array.from(e.target.files).slice(0, 4 - selectedPhotos.length);
+    if(e.target.files.length > files.length) showToast('⚠ Máximo 4 fotos');
     for(const f of files){
       try{ selectedPhotos.push(await compressImage(f)); }catch(err){}
     }
+    e.target.value = '';
     renderThumbs();
   };
+  const camInput = document.getElementById('f-photos-cam');
+  const galInput = document.getElementById('f-photos-gal');
+  document.getElementById('photo-zone-cam').onclick = ()=> camInput.click();
+  document.getElementById('photo-zone-gal').onclick = ()=> galInput.click();
+  camInput.onchange = addPhotos;
+  galInput.onchange = addPhotos;
   renderThumbs();
 
   ['f-nombre','f-vehiculo','f-desc','f-llegada'].forEach(id=>{
@@ -619,8 +641,16 @@ async function submitReport(){
     id: uid(), nombre, vehiculo, tipo: selectedTipo, urgencia: selectedUrgencia,
     descripcion: desc, llegadaBase, fotos: selectedPhotos.slice(), estado: 'pendiente', timestamp: new Date().toISOString(),
   };
-  reports.unshift(nuevoParte);
-  await saveReports();
+  try{
+    await addReportSafe(nuevoParte);
+  }catch(e){
+    console.error('Error guardando parte', e);
+    // el aviso por email se envía igualmente, pero el chofer ve que NO se guardó en la app
+    enviarEmailAviso(nuevoParte);
+    btn.disabled = false; btn.textContent = 'ENVIAR PARTE';
+    alert('⚠ El parte NO se ha guardado en la app (se ha enviado el aviso por correo).\n\nComprueba la conexión y pulsa ENVIAR PARTE otra vez. Si falla de nuevo, prueba con menos fotos.');
+    return;
+  }
   enviarEmailAviso(nuevoParte);
 
   selectedTipo = null; selectedUrgencia = null; selectedPhotos = [];
@@ -983,9 +1013,27 @@ function openLightbox(src){
 
 /* ---------------- REPARACIONES ---------------- */
 
+let repMatricula = '';
+let repDesde = '';
+let repHasta = '';
+let repModo = 'matricula';
+function repairsFiltradas(){
+  let list = repairs.slice();
+  if(repModo==='matricula'){
+    const q = normalizarMatricula(repMatricula);
+    if(q) list = list.filter(r=>normalizarMatricula(r.vehiculo).includes(q));
+  } else {
+    let d1 = repDesde, d2 = repHasta;
+    if(d1 && d2 && d1 > d2){ const t = d1; d1 = d2; d2 = t; }
+    if(d1) list = list.filter(r=>String(r.fecha||'').slice(0,10) >= d1);
+    if(d2) list = list.filter(r=>String(r.fecha||'').slice(0,10) <= d2);
+  }
+  return list.sort((a,b)=> new Date(b.fecha)-new Date(a.fecha));
+}
+
 function renderReparaciones(content){
   const total = repairs.reduce((s,r)=>s+(Number(r.coste)||0),0);
-  const sorted = repairs.slice().sort((a,b)=> new Date(b.fecha)-new Date(a.fecha));
+  const matriculasRep = [...new Set(repairs.map(r=>String(r.vehiculo||'').trim()).filter(Boolean))].sort();
 
   content.innerHTML =
     '<div class="summary-strip">'+
@@ -994,6 +1042,28 @@ function renderReparaciones(content){
     '</div>'+
     '<button class="add-toggle" id="toggle-add-rep">'+(showAddReparacion?'✕ Cancelar':'+ Registrar reparación')+'</button>'+
     '<div id="rep-form-wrap"></div>'+
+    '<div class="form-card" style="border-style:solid;">'+
+      '<div class="chip-row" style="margin-bottom:14px;">'+
+        '<div class="chip '+(repModo==='matricula'?'selected':'')+'" data-rmodo="matricula">🔎 Por matrícula</div>'+
+        '<div class="chip '+(repModo==='fecha'?'selected':'')+'" data-rmodo="fecha">📅 Por fecha</div>'+
+      '</div>'+
+      (repModo==='matricula' ?
+        '<div class="field"><label>Matrícula</label>'+
+          '<input type="text" id="rep-f-matricula" list="rep-matriculas" autocomplete="off" placeholder="Escribe o elige una matrícula…" value="'+attrSafe(repMatricula)+'"/>'+
+          '<datalist id="rep-matriculas">'+matriculasRep.map(m=>'<option value="'+attrSafe(m)+'"></option>').join('')+'</datalist>'+
+        '</div>'
+      :
+        '<div class="form-row">'+
+          '<div class="field"><label>Desde</label><input type="date" id="rep-f-desde" value="'+attrSafe(repDesde)+'"/></div>'+
+          '<div class="field"><label>Hasta</label><input type="date" id="rep-f-hasta" value="'+attrSafe(repHasta)+'"/></div>'+
+        '</div>'+
+        '<p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 12px;">Se filtra por la fecha de la reparación. Puedes rellenar solo una de las dos.</p>'
+      )+
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'+
+        '<span id="rep-count" style="font-size:12.5px;font-weight:700;color:var(--ink-soft);"></span>'+
+        '<button class="btn-ghost" id="rep-f-clear">Limpiar filtro</button>'+
+      '</div>'+
+    '</div>'+
     '<div id="rep-list"></div>';
 
   document.getElementById('toggle-add-rep').onclick = ()=>{ showAddReparacion = !showAddReparacion; renderReparaciones(content); };
@@ -1024,9 +1094,38 @@ function renderReparaciones(content){
     };
   }
 
+  document.querySelectorAll('[data-rmodo]').forEach(ch=>{
+    ch.onclick = ()=>{
+      if(repModo === ch.dataset.rmodo) return;
+      repModo = ch.dataset.rmodo;
+      repMatricula = ''; repDesde = ''; repHasta = '';
+      renderReparaciones(content);
+    };
+  });
+  const bindRep = (id, setter, events)=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    events.forEach(ev=> el.addEventListener(ev, (e)=>{ setter(e.target.value); paintRepairs(); }));
+  };
+  bindRep('rep-f-matricula', v=>{ repMatricula = v; }, ['input','change','keyup']);
+  bindRep('rep-f-desde', v=>{ repDesde = v; }, ['input','change']);
+  bindRep('rep-f-hasta', v=>{ repHasta = v; }, ['input','change']);
+  document.getElementById('rep-f-clear').onclick = ()=>{ repMatricula=''; repDesde=''; repHasta=''; renderReparaciones(content); };
+
+  function paintRepairs(){
+  const sorted = repairsFiltradas();
+  const cnt = document.getElementById('rep-count');
+  if(cnt){
+    const sumF = sorted.reduce((s,r)=>s+(Number(r.coste)||0),0);
+    cnt.textContent = sorted.length+' de '+repairs.length+' reparaciones · '+euros(sumF);
+  }
   const list = document.getElementById('rep-list');
-  if(sorted.length===0){
+  if(repairs.length===0){
     list.innerHTML = '<div class="empty-state"><p>Todavía no hay reparaciones registradas</p></div>';
+    return;
+  }
+  if(sorted.length===0){
+    list.innerHTML = '<div class="empty-state"><p>No hay reparaciones con esos filtros</p></div>';
     return;
   }
   list.innerHTML = sorted.map(r=>
@@ -1053,6 +1152,8 @@ function renderReparaciones(content){
       showToast('Reparación eliminada');
     };
   });
+  }
+  paintRepairs();
 }
 
 /* ---------------- NEUMATICOS ---------------- */
